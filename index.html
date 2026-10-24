@@ -200,6 +200,6 @@ window.addEventListener('online',()=>{if(session)pushCloud()});window.addEventLi
 $('#monthPick').value=new Date().toISOString().slice(0,7);$('#expDate').value=new Date().toLocaleDateString('en-CA');$('#savingsDate').value=new Date().toLocaleDateString('en-CA');refreshCategoryOptions();render();boot();
 if('serviceWorker'in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js'));
 </script>
-<script src="v25-overrides.js"></script>
+<script src="v27-overrides.js"></script>
 </body></html>
 
