@@ -5262,7 +5262,7 @@ window.FRESH_SHEET_HISTORY=[
     "kind": "income",
     "amount": 445,
     "currency": "USD",
-    "category": "تحويل عملة",
+    "category": "راتب",
     "desc": "راتب شهر 9",
     "date": "2026-10-01",
     "source": "sheet-live",
