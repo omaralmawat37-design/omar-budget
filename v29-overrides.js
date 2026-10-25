@@ -74,7 +74,7 @@
     originalRender();
     const changed = ensureManualSavingsLedger();
     renderManualSavings();
-    if(changed && session && !migrationSaveQueued){
+    if(changed && session && accountReady && !migrationSaveQueued){
       migrationSaveQueued = true;
       setTimeout(()=>{ migrationSaveQueued = false; save(); },0);
     }
