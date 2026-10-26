@@ -167,7 +167,7 @@
     data.settings.savingsLedgerInitialized = true;
     data.meta = {
       ...(data.meta || {}),
-      version: 29,
+      version: APP_VERSION,
       freshSheetImportedAt: new Date().toISOString(),
       freshSheetThrough: window.FRESH_SHEET_META?.through || '2026-10-24',
       freshSheetMovementCount: data.movements.length
