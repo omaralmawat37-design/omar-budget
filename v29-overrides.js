@@ -213,19 +213,51 @@
     return total;
   }
 
+  function emergencyMovement(item){
+    const deposit=item.type!=='withdraw';
+    return {
+      id:item.movementId,
+      kind:deposit?'expense':'income',
+      amount:Number(item.amount)||0,
+      currency:'USD',
+      category:'صندوق الطوارئ',
+      desc:`${deposit?'نقل إلى صندوق الطوارئ':'استرجاع من صندوق الطوارئ'}: ${item.note||'—'}`,
+      date:item.date,
+      source:'app',
+      emergencyTransfer:true,
+      emergencyEntryId:item.id
+    };
+  }
+
+  function upsertEmergencyMovement(item){
+    const movement=emergencyMovement(item),index=data.movements.findIndex(x=>String(x.id)===String(item.movementId)||String(x.emergencyEntryId)===String(item.id));
+    if(index>=0)data.movements[index]={...data.movements[index],...movement};
+    else data.movements.push(movement);
+  }
+
   function ensureEmergencyLedger(){
-    if(data.settings.emergencyLedgerInitialized) return false;
-    const existing = Number(data.settings.emergencyFundUsd)||0;
-    data.settings.emergencyEntries = existing > 0 ? [{
-      id: 'emergency-opening-' + Date.now(),
-      type: 'deposit',
-      amount: existing,
-      note: 'الرصيد الحالي',
-      date: new Date().toLocaleDateString('en-CA')
-    }] : [];
-    data.settings.emergencyLedgerInitialized = true;
+    let changed=false;
+    if(!data.settings.emergencyLedgerInitialized){
+      const existing = Number(data.settings.emergencyFundUsd)||0;
+      data.settings.emergencyEntries = existing > 0 ? [{
+        id: 'emergency-opening-' + Date.now(),
+        type: 'deposit',
+        amount: existing,
+        note: 'الرصيد الحالي',
+        date: new Date().toLocaleDateString('en-CA')
+      }] : [];
+      data.settings.emergencyLedgerInitialized = true;
+      changed=true;
+    }
+    data.settings.emergencyEntries=emergencyEntries().map(item=>{
+      if(item.movementId)return item;
+      const linked={...item,movementId:'emergency-transfer-'+item.id};
+      upsertEmergencyMovement(linked);
+      changed=true;
+      return linked;
+    });
     syncEmergencyTotal();
-    return true;
+    return changed;
   }
 
   function renderEmergencyFund(){
@@ -235,15 +267,15 @@
     const entries = [...emergencyEntries()].sort((a,b)=>String(b.date).localeCompare(String(a.date))||String(b.id).localeCompare(String(a.id)));
     document.querySelector('#emergencyHistory').innerHTML = entries.map(item=>{
       const withdrawal = item.type==='withdraw';
-      return `<div class="saving-row"><div><b>${withdrawal?'سحب من الطوارئ':'إيداع للطوارئ'}: ${esc(item.note||'—')}</b><small>${esc(item.date||'—')}</small></div><div class="saving-side"><b class="${withdrawal?'red':'green'}">${withdrawal?'-':'+'}$${fmtUsd(item.amount)}</b><div class="saving-actions"><button type="button" class="edit" data-emergency-action="edit" data-id="${esc(item.id)}">تعديل</button><button type="button" class="del" data-emergency-action="delete" data-id="${esc(item.id)}">حذف</button></div></div></div>`;
+      return `<div class="saving-row"><div><b>${withdrawal?'استرجاع إلى الرصيد':'نقل إلى الطوارئ'}: ${esc(item.note||'—')}</b><small>${esc(item.date||'—')}</small></div><div class="saving-side"><b class="${withdrawal?'gold':'green'}">${withdrawal?'-':'+'}$${fmtUsd(item.amount)}</b><div class="saving-actions"><button type="button" class="edit" data-emergency-action="edit" data-id="${esc(item.id)}">تعديل</button><button type="button" class="del" data-emergency-action="delete" data-id="${esc(item.id)}">حذف</button></div></div></div>`;
     }).join('') || '<div class="empty">لا توجد عمليات في صندوق الطوارئ.</div>';
   }
 
   function updateEmergencyMode(){
     const withdrawal = document.querySelector('#emergencyType').value==='withdraw';
-    document.querySelector('#emergencyNoteLabel').textContent = withdrawal ? 'سبب السحب' : 'مصدر المبلغ';
-    document.querySelector('#emergencyNote').placeholder = withdrawal ? 'مثال: علاج أو إصلاح عاجل' : 'مثال: محجوز من راتب شهر 11';
-    document.querySelector('#emergencySubmit').textContent = editingEmergencyId ? 'حفظ التعديل' : withdrawal ? '− سحب من صندوق الطوارئ' : '+ إيداع في صندوق الطوارئ';
+    document.querySelector('#emergencyNoteLabel').textContent = withdrawal ? 'سبب الاسترجاع' : 'مصدر المبلغ';
+    document.querySelector('#emergencyNote').placeholder = withdrawal ? 'مثال: احتجت 50$ للمصروف' : 'مثال: محجوز من راتب شهر 11';
+    document.querySelector('#emergencySubmit').textContent = editingEmergencyId ? 'حفظ التعديل' : withdrawal ? 'استرجاع إلى الرصيد المتاح' : 'نقل إلى صندوق الطوارئ';
     document.querySelector('#emergencyMessage').textContent = '';
   }
 
@@ -279,15 +311,16 @@
     if(!date){ message.textContent='اختر تاريخ العملية.'; return; }
     const nextTotal = emergencyTotal(editingEmergencyId) + (type==='withdraw'?-amount:amount);
     if(nextTotal < -0.001){ message.textContent='مبلغ السحب أكبر من رصيد صندوق الطوارئ.'; return; }
-    const item={id:editingEmergencyId||('emergency-'+Date.now()),type,amount,note,date};
+    const old=editingEmergencyId?emergencyEntries().find(x=>String(x.id)===String(editingEmergencyId)):null,id=old?.id||('emergency-'+Date.now()),movementId=old?.movementId||('emergency-transfer-'+id),item={id,movementId,type,amount,note,date};
     if(editingEmergencyId) data.settings.emergencyEntries=emergencyEntries().map(x=>String(x.id)===String(editingEmergencyId)?item:x);
     else data.settings.emergencyEntries=[...emergencyEntries(),item];
+    upsertEmergencyMovement(item);
     data.settings.emergencyLedgerInitialized=true;
     syncEmergencyTotal();
     const edited=!!editingEmergencyId;
     resetEmergencyForm();
     save();
-    document.querySelector('#emergencyMessage').textContent=edited?'تم حفظ تعديل العملية.':type==='withdraw'?'تم تسجيل السحب من صندوق الطوارئ.':'تم تسجيل الإيداع في صندوق الطوارئ.';
+    document.querySelector('#emergencyMessage').textContent=edited?'تم حفظ تعديل العملية وتحديث الرصيد.':type==='withdraw'?'تم استرجاع المبلغ إلى الرصيد المتاح.':'تم نقل المبلغ إلى صندوق الطوارئ.';
   });
 
   document.querySelector('#emergencyType').addEventListener('change',updateEmergencyMode);
@@ -315,6 +348,7 @@
       }
       armDelete(button,()=>{
         data.settings.emergencyEntries=emergencyEntries().filter(x=>String(x.id)!==String(item.id));
+        data.movements=data.movements.filter(x=>String(x.id)!==String(item.movementId)&&String(x.emergencyEntryId)!==String(item.id));
         syncEmergencyTotal();
         if(String(editingEmergencyId)===String(item.id))resetEmergencyForm();
         save();
