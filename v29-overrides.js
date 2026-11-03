@@ -165,6 +165,9 @@
     data.settings.manualSavingsUsd = 0;
     data.settings.savingsEntries = [];
     data.settings.savingsLedgerInitialized = true;
+    data.settings.emergencyFundUsd = 0;
+    data.settings.emergencyEntries = [];
+    data.settings.emergencyLedgerInitialized = true;
     data.meta = {
       ...(data.meta || {}),
       version: APP_VERSION,
@@ -178,9 +181,147 @@
     resetArmed = false;
     resetButton.textContent = 'إعادة بناء الحركات من الشيت';
     resetButton.classList.remove('danger');
-    status.textContent = `تم استبدال الحركات بـ ${data.movements.length} حركة من الشيت حتى 24/10. صندوق الادخار أصبح $0 والذمم بقيت كما هي.`;
+    status.textContent = `تم استبدال الحركات بـ ${data.movements.length} حركة من الشيت حتى 24/10. صندوقا الطوارئ والادخار أصبحا $0 والذمم بقيت كما هي.`;
   });
 
   resetManualSavingsForm();
+  render();
+})();
+
+(function(){
+  let editingEmergencyId = null;
+  let emergencyMigrationSaveQueued = false;
+
+  function emergencyEntries(){
+    if(!Array.isArray(data.settings.emergencyEntries)) data.settings.emergencyEntries = [];
+    data.settings.emergencyEntries = data.settings.emergencyEntries.map(item=>({...item,type:item.type==='withdraw'?'withdraw':'deposit'}));
+    return data.settings.emergencyEntries;
+  }
+
+  function emergencySignedAmount(item){
+    const amount = Number(item.amount)||0;
+    return item.type==='withdraw' ? -amount : amount;
+  }
+
+  function emergencyTotal(excludeId=null){
+    return emergencyEntries().filter(item=>String(item.id)!==String(excludeId)).reduce((sum,item)=>sum+emergencySignedAmount(item),0);
+  }
+
+  function syncEmergencyTotal(){
+    const total = emergencyTotal();
+    data.settings.emergencyFundUsd = total;
+    return total;
+  }
+
+  function ensureEmergencyLedger(){
+    if(data.settings.emergencyLedgerInitialized) return false;
+    const existing = Number(data.settings.emergencyFundUsd)||0;
+    data.settings.emergencyEntries = existing > 0 ? [{
+      id: 'emergency-opening-' + Date.now(),
+      type: 'deposit',
+      amount: existing,
+      note: 'الرصيد الحالي',
+      date: new Date().toLocaleDateString('en-CA')
+    }] : [];
+    data.settings.emergencyLedgerInitialized = true;
+    syncEmergencyTotal();
+    return true;
+  }
+
+  function renderEmergencyFund(){
+    ensureEmergencyLedger();
+    const total = syncEmergencyTotal();
+    document.querySelector('#emergencyBalance').textContent = '$' + fmtUsd(total);
+    const entries = [...emergencyEntries()].sort((a,b)=>String(b.date).localeCompare(String(a.date))||String(b.id).localeCompare(String(a.id)));
+    document.querySelector('#emergencyHistory').innerHTML = entries.map(item=>{
+      const withdrawal = item.type==='withdraw';
+      return `<div class="saving-row"><div><b>${withdrawal?'سحب من الطوارئ':'إيداع للطوارئ'}: ${esc(item.note||'—')}</b><small>${esc(item.date||'—')}</small></div><div class="saving-side"><b class="${withdrawal?'red':'green'}">${withdrawal?'-':'+'}$${fmtUsd(item.amount)}</b><div class="saving-actions"><button type="button" class="edit" data-emergency-action="edit" data-id="${esc(item.id)}">تعديل</button><button type="button" class="del" data-emergency-action="delete" data-id="${esc(item.id)}">حذف</button></div></div></div>`;
+    }).join('') || '<div class="empty">لا توجد عمليات في صندوق الطوارئ.</div>';
+  }
+
+  function updateEmergencyMode(){
+    const withdrawal = document.querySelector('#emergencyType').value==='withdraw';
+    document.querySelector('#emergencyNoteLabel').textContent = withdrawal ? 'سبب السحب' : 'مصدر المبلغ';
+    document.querySelector('#emergencyNote').placeholder = withdrawal ? 'مثال: علاج أو إصلاح عاجل' : 'مثال: محجوز من راتب شهر 11';
+    document.querySelector('#emergencySubmit').textContent = editingEmergencyId ? 'حفظ التعديل' : withdrawal ? '− سحب من صندوق الطوارئ' : '+ إيداع في صندوق الطوارئ';
+    document.querySelector('#emergencyMessage').textContent = '';
+  }
+
+  function resetEmergencyForm(){
+    editingEmergencyId = null;
+    document.querySelector('#emergencyForm').reset();
+    document.querySelector('#emergencyDate').value = new Date().toLocaleDateString('en-CA');
+    document.querySelector('#emergencyCancel').style.display = 'none';
+    document.querySelector('#emergencyMessage').textContent = '';
+    updateEmergencyMode();
+  }
+
+  const previousRender = render;
+  render = function(){
+    previousRender();
+    const changed = ensureEmergencyLedger();
+    renderEmergencyFund();
+    if(changed && session && accountReady && !emergencyMigrationSaveQueued){
+      emergencyMigrationSaveQueued = true;
+      setTimeout(()=>{ emergencyMigrationSaveQueued = false; save(); },0);
+    }
+  };
+
+  document.querySelector('#emergencyForm').addEventListener('submit',event=>{
+    event.preventDefault();
+    const type = document.querySelector('#emergencyType').value==='withdraw'?'withdraw':'deposit';
+    const amount = Number(document.querySelector('#emergencyAmount').value);
+    const note = document.querySelector('#emergencyNote').value.trim();
+    const date = document.querySelector('#emergencyDate').value;
+    const message = document.querySelector('#emergencyMessage');
+    if(!(amount>0)){ message.textContent='أدخل مبلغاً أكبر من صفر.'; return; }
+    if(!note){ message.textContent=type==='withdraw'?'اكتب سبب السحب.':'اكتب مصدر المبلغ.'; return; }
+    if(!date){ message.textContent='اختر تاريخ العملية.'; return; }
+    const nextTotal = emergencyTotal(editingEmergencyId) + (type==='withdraw'?-amount:amount);
+    if(nextTotal < -0.001){ message.textContent='مبلغ السحب أكبر من رصيد صندوق الطوارئ.'; return; }
+    const item={id:editingEmergencyId||('emergency-'+Date.now()),type,amount,note,date};
+    if(editingEmergencyId) data.settings.emergencyEntries=emergencyEntries().map(x=>String(x.id)===String(editingEmergencyId)?item:x);
+    else data.settings.emergencyEntries=[...emergencyEntries(),item];
+    data.settings.emergencyLedgerInitialized=true;
+    syncEmergencyTotal();
+    const edited=!!editingEmergencyId;
+    resetEmergencyForm();
+    save();
+    document.querySelector('#emergencyMessage').textContent=edited?'تم حفظ تعديل العملية.':type==='withdraw'?'تم تسجيل السحب من صندوق الطوارئ.':'تم تسجيل الإيداع في صندوق الطوارئ.';
+  });
+
+  document.querySelector('#emergencyType').addEventListener('change',updateEmergencyMode);
+  document.querySelector('#emergencyCancel').addEventListener('click',resetEmergencyForm);
+  document.querySelector('#emergencyHistory').addEventListener('click',event=>{
+    const button=event.target.closest('button[data-emergency-action]');
+    if(!button)return;
+    const item=emergencyEntries().find(x=>String(x.id)===String(button.dataset.id));
+    if(!item)return;
+    if(button.dataset.emergencyAction==='edit'){
+      editingEmergencyId=item.id;
+      document.querySelector('#emergencyType').value=item.type==='withdraw'?'withdraw':'deposit';
+      document.querySelector('#emergencyAmount').value=item.amount;
+      document.querySelector('#emergencyNote').value=item.note||'';
+      document.querySelector('#emergencyDate').value=item.date||new Date().toLocaleDateString('en-CA');
+      document.querySelector('#emergencyCancel').style.display='block';
+      updateEmergencyMode();
+      document.querySelector('#emergencyForm').scrollIntoView({behavior:'smooth'});
+      return;
+    }
+    if(button.dataset.emergencyAction==='delete'){
+      if(emergencyTotal(item.id)<-0.001){
+        document.querySelector('#emergencyMessage').textContent='لا يمكن حذف هذا الإيداع لأن رصيد الطوارئ سيصبح سالباً. احذف أو عدّل السحب المرتبط به أولاً.';
+        return;
+      }
+      armDelete(button,()=>{
+        data.settings.emergencyEntries=emergencyEntries().filter(x=>String(x.id)!==String(item.id));
+        syncEmergencyTotal();
+        if(String(editingEmergencyId)===String(item.id))resetEmergencyForm();
+        save();
+      });
+    }
+  });
+
+  resetEmergencyForm();
   render();
 })();
